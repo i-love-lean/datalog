@@ -36,7 +36,7 @@ Ltac2 destruct_matching_hyps ts :=
 
 Ltac2 autodestr0 () := Control.enter (fun () => destruct_matching_hyps (to_destruct ())).
 
-Ltac2 Notation autodestr := autodestr0 ().
+Ltac2 Abbreviation autodestr := autodestr0 ().
 Ltac autodestr := ltac2:(autodestr).
 Goal forall x : nat * nat, nat.
   autodestr.
