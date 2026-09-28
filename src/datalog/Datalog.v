@@ -8,7 +8,7 @@ From Datalog.Util Require Import Autodestr Autocbn Pftree.
 
 From coqutil Require Import Map.Interface Map.Properties Map.Solver Tactics Tactics.fwd Datatypes.List Datatypes.Option Eqb.
 
-From Datalog Require Import Map Tactics Fp List Eqb Decidable.
+From Datalog Require Import Map Tactics Fp List Eqb Decidable Default.
 From GraphSearch Require Import Dag.
 
 Import ListNotations.
@@ -405,6 +405,15 @@ Module meta_fact.
         fact_pattern.matches mf.(meta_fact.pattern) nf ->
         fset.contains mf.(meta_fact.set) nf.(normal_fact.args) <-> S nf.
 
+    Lemma consistent_with_ext mf S1 S2 :
+      consistent_with mf S1 ->
+      (forall nf, nf.(normal_fact.rel) = rel mf -> S1 nf <-> S2 nf) ->
+      consistent_with mf S2.
+    Proof.
+      cbv [consistent_with]. intros H HS nf Hm. rewrite H by assumption. apply HS.
+      destruct Hm as (Hrel & _). cbv [rel]. congruence.
+    Qed.
+
     Definition agree (mf1 mf2 : meta_fact) :=
       forall nf,
         fact_pattern.matches mf1.(pattern) nf ->
@@ -678,37 +687,37 @@ Module fact.
       | normal _ => False
       end.
 
-    Definition normal_facts (f : fact) : list normal_fact :=
+    Definition as_normal (f : fact) : option normal_fact :=
       match f with
-      | normal nf => [nf]
-      | meta _ => []
+      | normal nf => Some nf
+      | meta _ => None
       end.
 
-    Lemma in_normal_facts nf f :
-      In nf (normal_facts f) <-> f = normal nf.
+    Lemma as_normal_Some nf f :
+      as_normal f = Some nf <-> f = normal nf.
     Proof. destruct f; simpl; intuition congruence. Qed.
 
-    Lemma in_flat_map_normal_facts nf fs :
-      In nf (flat_map normal_facts fs) <-> In (normal nf) fs.
+    Lemma in_filter_map_as_normal nf fs :
+      In nf (filter_map as_normal fs) <-> In (normal nf) fs.
     Proof.
-      rewrite in_flat_map. setoid_rewrite in_normal_facts.
+      rewrite in_filter_map. setoid_rewrite as_normal_Some.
       split; [intros (? & ? & ->) | intros]; eauto.
     Qed.
 
-    Definition meta_facts (f : fact) : list meta_fact :=
+    Definition as_meta (f : fact) : option meta_fact :=
       match f with
-      | normal _ => []
-      | meta mf => [mf]
+      | normal _ => None
+      | meta mf => Some mf
       end.
 
-    Lemma in_meta_facts mf f :
-      In mf (meta_facts f) <-> f = meta mf.
+    Lemma as_meta_Some mf f :
+      as_meta f = Some mf <-> f = meta mf.
     Proof. destruct f; simpl; intuition congruence. Qed.
 
-    Lemma in_flat_map_meta_facts mf fs :
-      In mf (flat_map meta_facts fs) <-> In (meta mf) fs.
+    Lemma in_filter_map_as_meta mf fs :
+      In mf (filter_map as_meta fs) <-> In (meta mf) fs.
     Proof.
-      rewrite in_flat_map. setoid_rewrite in_meta_facts.
+      rewrite in_filter_map. setoid_rewrite as_meta_Some.
       split; [intros (? & ? & ->) | intros]; eauto.
     Qed.
 
@@ -1549,6 +1558,7 @@ Module program.
                                     normal_fact.args := args |}).
       cbv [fact_pattern.matches]. auto.
     Qed.
+
     (* Lemma staged_program_prog_impl_with_no_meta_rules p1 p2 Q f : *)
     (*   disjoint_lists (flat_map concl_rels p1) (flat_map hyp_rels p2) -> *)
     (*   prog_impl_with_no_meta_rules (p1 ++ p2) Q f -> *)
@@ -1630,6 +1640,10 @@ Module program.
   End __.
   Abbreviation interp p := (pftree (interp_step p)).
 End program. Abbreviation program := program.program.
+
+#[export] Instance program_default `{relT} `{exprvarT} `{fnT} `{aggregatorT} : WithDefault program :=
+  {| program.rules := []; program.meta_rules := [] |}.
+
 Fixpoint expr_varmap {var1 var2 : exprvarT} {fn : fnT}
   (f : var1 -> var2) (e : @expr var1 fn) : @expr var2 fn :=
   match e with

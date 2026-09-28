@@ -39,20 +39,18 @@ Module message.
       | done_with _ _ _ => false
       end.
 
-    Definition normal_facts (f : message) : list normal_fact :=
+    Definition as_normal (f : message) : option normal_fact :=
       match f with
-      | normal nf => [nf]
-      | done_with _ _ _ => []
+      | normal nf => Some nf
+      | done_with _ _ _ => None
       end.
 
-    Lemma in_flat_map_normal_facts nf l :
-      In nf (flat_map normal_facts l) <-> In (normal nf) l.
+    Lemma in_filter_map_as_normal nf l :
+      In nf (filter_map as_normal l) <-> In (normal nf) l.
     Proof.
-      rewrite in_flat_map. split.
-      - intros ([nf' | ] & Hin & Hnf); simpl in Hnf.
-        + destruct Hnf as [-> | []]. exact Hin.
-        + destruct Hnf.
-      - intros Hin. eexists. split; [exact Hin|]. simpl. auto.
+      rewrite in_filter_map. split.
+      - intros ([nf' | ] & Hin & Hnf); simpl in Hnf; congruence.
+      - intros Hin. eexists. split; [exact Hin|]. reflexivity.
     Qed.
 
     Definition rel (f : message) : rel :=
@@ -96,6 +94,10 @@ Module state.
     Record state :=
       { known : list message;
         sent : list message }.
+
+    Definition add_to_known inps s :=
+      {| known := inps ++ s.(known);
+        sent := s.(sent) |}.
   End __.
 End state. Abbreviation state := state.state.
 
@@ -106,15 +108,15 @@ Section __.
   Definition knows_normal_fact (known : list message) (nf : normal_fact) :=
     In (message.normal nf) known.
 
-  Definition expects_num_facts (known : list message) (pat : fact_pattern) num :=
+  Definition expects_num_facts (senders : list sender_label) (pat : fact_pattern) (known : list message) num :=
     exists expected_msgss,
       Forall2 (fun n expected_msgs => In (message.done_with pat n expected_msgs) known)
-        (R_senders pat.(fact_pattern.rel)) expected_msgss /\
+        senders expected_msgss /\
         num = list_sum expected_msgss.
 
   Definition knows_meta_fact (known : list message) (mf : meta_fact) :=
     exists num,
-      expects_num_facts known mf.(meta_fact.pattern) num /\
+      expects_num_facts (R_senders (meta_fact.rel mf)) mf.(meta_fact.pattern) known num /\
         Existsn (message.matches mf.(meta_fact.pattern)) num known /\
         meta_fact.consistent_with mf (knows_normal_fact known).
 
@@ -133,9 +135,6 @@ Section __.
     exists mhyps,
       meta_rule.pattern_interp mr pat (map meta_fact.pattern mhyps) /\
         Forall (knows_meta_fact known) mhyps.
-
-  Definition sends_concl_rels (nm : sender_label) (p : program) :=
-    forall R, In R (program.concl_rels p) -> In nm (R_senders R).
 
   Context (p : program) (name : sender_label).
 
@@ -189,7 +188,7 @@ Section __.
       exists cnt, In (message.done_with pat src cnt) l.
 
   Definition consistent (pat : fact_pattern) (known : list message) : Prop :=
-    exists num, expects_num_facts known pat num /\
+    exists num, expects_num_facts (R_senders pat.(fact_pattern.rel)) pat known num /\
              Existsn_ge (message.matches pat) num known.
 
   Definition nle (s1 s2 : state) :=
@@ -233,7 +232,7 @@ Section __.
   Lemma submultiset_rest_no_matches pat small rest big num :
     Permutation big (small ++ rest) ->
     allowed_inputs big ->
-    expects_num_facts small pat num ->
+    expects_num_facts (R_senders pat.(fact_pattern.rel)) pat small num ->
     Existsn (message.matches pat) num small ->
     Forall (fun x => ~ message.matches pat x) rest.
   Proof.
@@ -302,7 +301,7 @@ Section __.
       apply in_app_or in Hin_app. destruct Hin_app as [Hin | Hinr]; [exact Hin |].
       exfalso. apply (Hrest_no _ Hinr). exact Hcov.
     - destruct Hknow_big as (num_new & Hexp_new & Hex_new & Hiff_new).
-      rewrite Hcov in Hexp_h, Hex_h, Hrest_no.
+      cbv [meta_fact.rel] in Hexp_h. rewrite Hcov in Hexp_h, Hex_h, Hrest_no.
       exists num_h. split; [exact Hexp_h | split; [exact Hex_h |]].
       intros nf Hm. specialize (Hiff_new nf Hm). split.
       + intro Hset. apply Hiff_new in Hset.
@@ -437,10 +436,19 @@ Section __.
       + discriminate Hinp.
   Qed.
 
-  Lemma expects_num_facts_incl pat l1 l2 num :
-    expects_num_facts l1 pat num -> incl l1 l2 ->
-    expects_num_facts l2 pat num.
+  Lemma expects_num_facts_incl senders pat l1 l2 num :
+    expects_num_facts senders pat l1 num -> incl l1 l2 ->
+    expects_num_facts senders pat l2 num.
   Proof. cbv [expects_num_facts]. intros. fwd. eauto using Forall2_impl. Qed.
+
+  Lemma expects_num_facts_cons_normal senders pat nf known num :
+    expects_num_facts senders pat (message.normal nf :: known) num <->
+      expects_num_facts senders pat known num.
+  Proof.
+    cbv [expects_num_facts].
+    split; intros (nums & HF & ->); exists nums; (split; [| reflexivity]);
+      (eapply Forall2_impl; [exact HF|]); simpl; intros; intuition congruence.
+  Qed.
 
   #[local] Hint Resolve expects_num_facts_incl Existsn_ge_submultiset
     Existsn_le_submultiset submultiset_incl incl_def : core.
@@ -554,7 +562,7 @@ Section __.
       apply (proj1 (Hiff_s nf Hcov)). apply (proj2 (Hiff_b nf Hcov)). exact Hknow_big.
     - destruct Hhyps as (num_s & Hexp_s & Hex_s & Hiff_s).
       destruct Hknow_big as (_ & _ & _ & Hiff_b). destruct Hkb as (_ & _ & _ & Hiff_b').
-      rewrite Hcov in Hexp_s, Hex_s.
+      cbv [meta_fact.rel] in Hexp_s. rewrite Hcov in Hexp_s, Hex_s.
       exists num_s. split; [ exact Hexp_s | split; [ exact Hex_s | ] ].
       intros nf Hm.
       assert (Hm' : fact_pattern.matches mh.(meta_fact.pattern) nf)
@@ -885,6 +893,5 @@ Section __.
     - symmetry. exact Ho'_eq.
     - erewrite <- sent_eq_outputs by eassumption. eassumption.
   Qed.
-
 End __.
 End node.
